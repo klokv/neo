@@ -59,7 +59,9 @@ function askInput(title, placeholder, value = '') {
     bd.querySelector('.m-cancel').onclick = () => done(null);
     input.onkeydown = (e) => {
       if (e.key === 'Enter') done(input.value.trim());
-      if (e.key === 'Escape') done(null);
+      // the prompt is gone by the time Esc bubbles up, so without this the
+      // editor's own Esc would close the book too
+      if (e.key === 'Escape') { e.stopPropagation(); done(null); }
     };
   });
 }
