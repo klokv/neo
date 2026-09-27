@@ -7,12 +7,13 @@
 
 (() => {
   let on = false;
-  let mode = 'normal';     // 'normal' | 'insert'
+  let mode = 'normal';     // 'normal' | 'insert' | 'visual'
   let pending = '';        // keys of an unfinished command: 3dw, gg, fa, ciw…
   let xChar = '';          // x keeps its character here, off the clipboard
   let lastWasX = false;    // p right after x pastes xChar, so xp swaps letters
   let xTook = false;       // x removed something (a flag or *** leaves xChar empty)
   let reg = null;          // what d, c and y last took, whole: { html, text, lines }
+  let vis = null;          // visual mode: { line, a, h }, anchor and head as { p, off }
 
   const sel = () => window.getSelection();
 
@@ -20,6 +21,7 @@
     on = !!(library && library.vim);
     mode = 'normal';
     pending = '';
+    vis = null;
     if (window.neo.vimState) window.neo.vimState(on); // the View menu's tick
     paint();
   }
@@ -725,6 +727,8 @@
       case 'gg': { const p = allParas()[0]; if (p) place(p, 0); return true; }
       case 'G': { const a = allParas(); if (a.length) place(a[a.length - 1], 0); return true; }
       case 'ZZ': backToShelf(); return true;
+      case 'v': startVisual(false); return true;
+      case 'V': startVisual(true); return true;
     }
     if (!MOTION.test(rest)) { unknown(pending); return true; }
     const t = motion(rest, h, count);
@@ -745,6 +749,102 @@
     reveal();
     paint();
   }
+
+  // The selection is the engine's own, drawn from an anchor and a head that
+  // the motions move. Like vim, v includes the letter under the head. A
+  // selection stays inside its chapter: each chapter is its own editing
+  // host and the engine won't delete across two.
+
+  function startVisual(line) {
+    const h = here();
+    if (!h) return;
+    vis = { line, a: { ...h }, h: { ...h } };
+    setMode('visual');
+    drawVisual();
+  }
+  function endVisual(to) {
+    const h = vis && (to || vis.h);
+    vis = null;
+    setMode('normal');
+    if (h && h.p.isConnected) place(h.p, Math.min(h.off, stepBack(h.p.textContent, h.p.textContent.length)));
+    clamp();
+    paint();
+  }
+  function ordered() {
+    const { a, h } = vis;
+    const first = a.p === h.p ? a.off <= h.off : !!(a.p.compareDocumentPosition(h.p) & Node.DOCUMENT_POSITION_FOLLOWING);
+    return first ? [a, h] : [h, a];
+  }
+  // what the selection covers, as an operator's target
+  function visualTarget() {
+    const [s0, e0] = ordered();
+    return vis.line ? { lines: [s0.p, e0.p] } : { from: s0, to: { p: e0.p, off: charEnd(e0.p.textContent, e0.off) } };
+  }
+  function drawVisual() {
+    const t = visualTarget();
+    const r = t.lines ? rangeOf({ p: t.lines[0], off: 0 }, { p: t.lines[1], off: len(t.lines[1]) }) : rangeOf(t.from, t.to);
+    const s = sel();
+    s.removeAllRanges();
+    s.addRange(r);
+  }
+
+  function runVisual(k) {
+    pending += k;
+    const m = pending.match(/^([1-9]\d*)?(.*)$/);
+    const rest = m[2];
+    if (!rest) return;
+    const count = +(m[1] || 1);
+    if (/^[gfFtTia]$/.test(rest)) return;
+    const keys = pending;
+    pending = '';
+    const { h } = vis;
+
+    if (rest === 'v' || rest === 'V') {
+      if (vis.line === (rest === 'V')) endVisual();
+      else { vis.line = rest === 'V'; drawVisual(); }
+      return;
+    }
+    if (rest === 'o') { vis = { ...vis, a: vis.h, h: vis.a }; drawVisual(); return; }
+    if ('dxcsy'.includes(rest)) { visualOperator(rest); return; }
+    if (!MOTION.test(rest) && !OBJECT.test(rest)) { unknown(keys); return; }
+    if (OBJECT.test(rest)) {
+      const r = textObject(rest, h);
+      if (r && r[1] > r[0]) { vis.a = { p: h.p, off: r[0] }; vis.h = { p: h.p, off: stepBack(h.p.textContent, r[1]) }; drawVisual(); }
+      return;
+    }
+
+    // a motion moves the head; line motions need the real caret, so it
+    // collapses onto the head, moves, and the selection is drawn again
+    place(h.p, h.off);
+    let t = null;
+    if (rest === 'j' || rest === 'k') { lines(count, rest === 'j' ? 'forward' : 'backward'); t = here(); }
+    else if (rest === 'gg') { const p = allParas()[0]; t = p && { p, off: 0 }; }
+    else if (rest === 'G') { const a = allParas(); t = a.length && { p: a[a.length - 1], off: 0 }; }
+    else {
+      t = motion(rest, h, count);
+      if (t && t.moved) t = here();
+    }
+    // stay inside the chapter; the head sits on a letter, not after the last
+    if (t && t.p && t.p.parentElement === vis.a.p.parentElement) {
+      vis.h = { p: t.p, off: Math.min(t.off, stepBack(t.p.textContent, t.p.textContent.length)) };
+      place(vis.h.p, vis.h.off);
+      reveal();
+    }
+    drawVisual();
+  }
+
+  function visualOperator(op) {
+    const t = visualTarget();
+    const start = ordered()[0];
+    vis = null;
+    setMode('normal');
+    operate({ x: 'd', s: 'c' }[op] || op, t);
+    if (op === 'y') place(start.p, t.lines ? 0 : start.off);
+    if (mode === 'normal') clamp();
+    paint();
+  }
+  // a click or a drag ends visual mode; the mouse's selection is its own
+  document.addEventListener('mousedown', () => { if (vis) { vis = null; setMode('normal'); } }, true);
 
   // a mouse selection in normal mode: x/d cut it, y copies it, c cuts and writes
   function onSelection(k) {
@@ -782,7 +882,7 @@
       setMode('normal');
       return true;
     }
-    if (e.ctrlKey && !e.metaKey && !e.altKey && e.key === 'r') {
+    if (mode === 'normal' && e.ctrlKey && !e.metaKey && !e.altKey && e.key === 'r') {
       take();
       document.execCommand('redo');
       afterHistory();
@@ -791,6 +891,15 @@
       return true;
     }
     if (!plain) return false; // ⌘ and Ctrl shortcuts are NEO's
+    if (mode === 'visual') {
+      if (e.key === 'Escape') { take(); endVisual(); return true; }
+      if (e.key === 'Tab') { take(); return true; }
+      const k = ALIASES[e.key] || e.key;
+      if (k.length !== 1) return false;
+      take();
+      runVisual(k);
+      return true;
+    }
     if (e.key === 'Escape') {
       pending = '';
       if (!document.getElementById('searchbar').hidden) return false; // let Esc close search
