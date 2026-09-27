@@ -14,6 +14,7 @@
   let xTook = false;       // x removed something (a flag or *** leaves xChar empty)
   let reg = null;          // what d, c and y last took, whole: { html, text, lines }
   let vis = null;          // visual mode: { line, a, h }, anchor and head as { p, off }
+  let ex = null;           // a :command being typed, shown in NEO's hint pill
 
   const sel = () => window.getSelection();
 
@@ -22,6 +23,7 @@
     mode = 'normal';
     pending = '';
     vis = null;
+    ex = null;
     if (window.neo.vimState) window.neo.vimState(on); // the View menu's tick
     paint();
   }
@@ -35,6 +37,7 @@
   function setMode(m) {
     mode = m;
     pending = '';
+    if (ex !== null) hideEx();
     paint();
   }
 
@@ -863,6 +866,30 @@
     return true;
   }
 
+  // Just the ways out of vim. NEO saves as you go, so every one of them
+  // saves and goes back to the shelf; :w saves on the spot.
+
+  const QUITS = ['q', 'q!', 'wq', 'wq!', 'x', 'x!', 'qa', 'qa!', 'wqa', 'xa'];
+  function showEx() { toast(':' + ex, 10 * 60 * 1000); }
+  function hideEx() {
+    ex = null;
+    clearTimeout(toast._t);
+    document.getElementById('hint').hidden = true;
+  }
+  function exKey(e) {
+    if (e.key === 'Escape' || (e.key === 'Backspace' && !ex)) { hideEx(); return; }
+    if (e.key === 'Backspace') { ex = ex.slice(0, -1); showEx(); return; }
+    if (e.key === 'Enter') {
+      const cmd = ex.trim();
+      hideEx();
+      if (QUITS.includes(cmd)) backToShelf();
+      else if (cmd === 'w') { flushAllSaves(); toast('Saved. NEO saves as you write, too.'); }
+      else if (cmd) toast(`:${cmd} isn't a NEO command. :q goes back to the shelf.`);
+      return;
+    }
+    if (e.key.length === 1) { ex += e.key; showEx(); }
+  }
+
   const ALIASES = { Enter: 'j', Backspace: 'h', ' ': 'l', Delete: 'x' };
 
   // called first in the chapter's keydown chain; true = the key was vim's
@@ -900,6 +927,8 @@
       runVisual(k);
       return true;
     }
+    if (ex !== null) { take(); exKey(e); return true; }
+    if (e.key === ':' && !pending) { take(); ex = ''; showEx(); return true; }
     if (e.key === 'Escape') {
       pending = '';
       if (!document.getElementById('searchbar').hidden) return false; // let Esc close search

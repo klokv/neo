@@ -4745,7 +4745,7 @@ function showHelp() {
         ${row(K('⌘⇧T', 'Ctrl+Shift+T'), 'Typewriter scrolling')}
         ${row(K('⌘⇧O', 'Ctrl+Shift+O'), 'Focus mode: off → paragraph → sentence → off (View → Focus Mode picks one directly)')}
         ${row(K('⌘;', 'Ctrl+;'), 'Spellcheck pass (right-click squiggles for fixes)')}
-        ${row('View → Vim Mode', 'Esc to move around, i to write, ZZ back to the shelf (Esc no longer is). d, c and y replace the clipboard; x doesn’t.')}
+        ${row('View → Vim Mode', 'Esc to move around, i to write, :q or ZZ back to the shelf (Esc no longer is). d, c and y replace the clipboard; x doesn’t.')}
       </div>
 
       <div class="help-sec">Files</div>
