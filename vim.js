@@ -146,25 +146,23 @@
     else if (r.bottom > v.bottom - pad) sc.scrollTop += r.bottom - (v.bottom - pad);
   }
 
-  // Normal mode paints the character under the caret (CSS Highlight API, like
-  // search and focus mode), so the saved HTML is never touched. An empty
-  // paragraph has no character to paint and shows the thin caret instead.
-
+  // Normal mode shows a block caret. Visual mode and a half-typed command
+  // (7d, ci, g, :wq) show in NEO's hint pill, as on vim's bottom line.
+  let shown = '';
   function paint() {
-    const hl = window.CSS && CSS.highlights;
-    const normal = on && mode === 'normal';
-    document.body.classList.toggle('vim-normal', normal);
-    if (!hl) return;
-    const h = normal ? here() : null;
-    const r = h && h.off < h.p.textContent.length ? rangeFromOffsets(h.p, h.off, h.off + 1) : null;
-    document.body.classList.toggle('vim-bar', normal && !r);
-    if (r) {
-      const block = new Highlight(r);
-      block.priority = 10; // above focus mode and search
-      hl.set('neo-vim', block);
-    } else hl.delete('neo-vim');
+    document.body.classList.toggle('vim-normal', on && mode === 'normal');
+    const text = !on ? '' : ex !== null ? ':' + ex
+      : [mode === 'visual' ? (vis && vis.line ? 'VISUAL LINE' : 'VISUAL') : '', pending].filter(Boolean).join(' ');
+    const hint = document.getElementById('hint');
+    if (text) {
+      toast(text, 10 * 60 * 1000);
+      shown = text;
+    } else if (shown) {
+      // leave anyone else's message alone
+      if (hint.textContent === shown) { clearTimeout(toast._t); hint.hidden = true; }
+      shown = '';
+    }
   }
-  document.addEventListener('selectionchange', () => { if (on) paint(); });
 
   // Like vim's word/WORD split: letters (with apostrophes, so don’t is one
   // word, and accents), punctuation, and the spaces between them.
@@ -890,12 +888,8 @@
   // saves and goes back to the shelf; :w saves on the spot.
 
   const QUITS = ['q', 'q!', 'wq', 'wq!', 'x', 'x!', 'qa', 'qa!', 'wqa', 'xa'];
-  function showEx() { toast(':' + ex, 10 * 60 * 1000); }
-  function hideEx() {
-    ex = null;
-    clearTimeout(toast._t);
-    document.getElementById('hint').hidden = true;
-  }
+  function showEx() { paint(); }
+  function hideEx() { ex = null; paint(); }
   function exKey(e) {
     if (e.key === 'Escape' || (e.key === 'Backspace' && !ex)) { hideEx(); return; }
     if (e.key === 'Backspace') { ex = ex.slice(0, -1); showEx(); return; }
@@ -945,12 +939,14 @@
       if (k.length !== 1) return false;
       take();
       runVisual(k);
+      paint();
       return true;
     }
     if (ex !== null) { take(); exKey(e); return true; }
     if (e.key === ':' && !pending) { take(); ex = ''; showEx(); return true; }
     if (e.key === 'Escape') {
       pending = '';
+      paint();
       if (!document.getElementById('searchbar').hidden) return false; // let Esc close search
       take();
       window.neo.fullscreenEscape(); // still leaves full screen, never the book
@@ -962,6 +958,7 @@
     take();
     if (!pending && !sel().isCollapsed && onSelection(k)) return true;
     run(k);
+    paint();
     return true;
   }
 

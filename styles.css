@@ -428,11 +428,8 @@ body.focus-mode .chapter-body,
 body.focus-mode .chapter-head { color: color-mix(in srgb, var(--ink) 28%, var(--paper)); }
 ::highlight(neo-focus) { color: #1c1c1c; }
 body.night ::highlight(neo-focus) { color: #d6d2c6; }
-/* vim mode (vim.js): normal mode trades the thin caret for a block,
-   painted as a highlight; an empty paragraph keeps the thin caret */
-body.vim-normal .chapter-body { caret-color: transparent; }
-body.vim-normal.vim-bar .chapter-body { caret-color: var(--ink); }
-::highlight(neo-vim) { background-color: var(--ink); color: var(--paper); }
+/* vim mode (vim.js): a block caret in normal mode */
+body.vim-normal .chapter-body { caret-shape: block; }
 /* the drop cap sits outside the highlight's reach; same selector as the cap
    itself so no other paragraph grows a ::first-letter */
 body.focus-mode:not(.no-dropcap) .chapter-body.focus-cap:not(.cap-off) p:not(.poetry):not(p:not(.poetry) ~ p)::first-letter { color: var(--ink); }
