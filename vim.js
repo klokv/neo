@@ -1,6 +1,6 @@
 /* ============================ VIM MODE ============================ */
 // View → Vim Mode: modal editing for the manuscript, off by default.
-// Loaded after app.js, whose helpers it uses; exposes window.neoVim.
+// Loaded after app.js, whose helpers it uses; exposes window.NeoVim.
 // Pocket doesn't load it, so the hooks in app.js stay inert there.
 
 'use strict';
@@ -58,9 +58,16 @@
     if (body && document.activeElement !== body) body.focus({ preventScroll: true });
   }
 
+  // placeholder flags and darling anchors are single, uneditable marks:
+  // a point is before one or after it, never inside
+  const markOf = (n) => (n && (n.nodeType === Node.TEXT_NODE ? n.parentElement : n).closest('.ph-mark, .darling-anchor')) || null;
   function pointAt(p, off) {
     const r = rangeFromOffsets(p, Math.min(off, len(p)), Math.min(off, len(p)));
-    return r ? [r.startContainer, r.startOffset] : [p, 0];
+    if (!r) return [p, 0];
+    const m = markOf(r.startContainer);
+    if (!m) return [r.startContainer, r.startOffset];
+    const i = Array.prototype.indexOf.call(m.parentNode.childNodes, m);
+    return [m.parentNode, r.startOffset > 0 ? i + 1 : i];
   }
   function rangeOf(a, b) {
     const r = document.createRange();
@@ -324,11 +331,13 @@
     place(h.p, o);
   }
 
-  // a fresh paragraph must not inherit a scene break's or ghost's styling
+  // a fresh paragraph is prose, like one made with Enter: no scene break's,
+  // ghost's or poem's styling carried over
   function cleanNewPara() {
     const p = focusParagraph();
     if (!p) return;
-    p.classList.remove('scene-break', 'ghost');
+    if (p.classList.contains('poetry')) romanize(p);
+    p.classList.remove('scene-break', 'ghost', 'poetry');
     if (!p.className) p.removeAttribute('class');
     p.removeAttribute('style');
   }
@@ -576,7 +585,49 @@
   function afterHistory() {
     const s = sel();
     if (s.rangeCount && !s.isCollapsed) s.collapseToStart();
+    followFlags();
   }
+
+  // x on a flag clears it, note and all, as Backspace does. The flag goes
+  // through the engine, so u, Ctrl+R and ⌘Z bring it back and take it
+  // away again, and its note comes and goes with it.
+  const clearedNotes = new Map(); // sid → the note of a flag x cleared
+  function clearFlag(h, m) {
+    const sid = m.classList.contains('ph-mark') ? m.dataset.sid : '';
+    const note = sid && stickies.find((s) => s.id === sid);
+    if (note) clearedNotes.set(sid, note);
+    const marks = '.ph-mark, .darling-anchor';
+    const out = h.p.cloneNode(true);
+    const gone = out.querySelectorAll(marks)[[...h.p.querySelectorAll(marks)].indexOf(m)];
+    const before = gone.previousSibling;
+    const after = gone.nextSibling;
+    gone.remove();
+    // one space at the seam, not two (resolveSticky's rule)
+    if (before && after && before.nodeType === Node.TEXT_NODE && after.nodeType === Node.TEXT_NODE &&
+        /[ \u00a0]$/.test(before.data) && /^[ \u00a0]/.test(after.data)) after.data = after.data.slice(1);
+    const body = h.p.parentElement;
+    const i = indexIn(h.p);
+    replaceParas(h.p, h.p, out.outerHTML);
+    if (sid) resolveSticky(sid); // the note, now that its flag is gone
+    place(body.children[i], h.off);
+  }
+  function followFlags() {
+    let changed = false;
+    for (const [sid, note] of clearedNotes) {
+      const flag = document.querySelector(`.chapter-body .ph-mark[data-sid="${CSS.escape(sid)}"]`);
+      const at = stickies.findIndex((s) => s.id === sid);
+      if (flag && at < 0) { stickies.push(note); changed = true; }
+      else if (!flag && at >= 0) { clearedNotes.set(sid, stickies[at]); stickies.splice(at, 1); changed = true; }
+    }
+    if (!changed) return;
+    window.neo.writeJSON(book.id, 'stickies', stickies);
+    renderStickies();
+    scheduleNavRefresh();
+  }
+  // ⌘Z and the Edit menu undo without vim
+  document.addEventListener('input', (e) => {
+    if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') followFlags();
+  }, true);
 
   function motion(m, h, count) {
     let t = { p: h.p, off: h.off };
@@ -648,6 +699,9 @@
         xChar = '';
         xTook = false;
         if (isBreak(h.p)) { deleteParas(h.p, h.p, false); xTook = true; return true; }
+        const r = rangeFromOffsets(h.p, h.off, charEnd(h.p.textContent, h.off));
+        const m = r && markOf(r.endContainer);
+        if (m) { clearFlag(h, m); xTook = true; return true; }
         let b = h.off;
         for (let n = 0; n < count && b < end; n++) b = charEnd(h.p.textContent, b);
         if (b <= h.off) return true;
@@ -741,6 +795,7 @@
       pending = '';
       if (!document.getElementById('searchbar').hidden) return false; // let Esc close search
       take();
+      window.neo.fullscreenEscape(); // still leaves full screen, never the book
       return true;
     }
     if (e.key === 'Tab') { take(); return true; }
@@ -752,5 +807,5 @@
     return true;
   }
 
-  window.neoVim = { key, apply, toggle };
+  window.NeoVim = { key, apply, toggle };
 })();
