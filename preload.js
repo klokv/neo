@@ -46,6 +46,9 @@ contextBridge.exposeInMainWorld('neo', {
 
   poetryState: (on) => ipcRenderer.send('poetry:state', on),
   typewriterState: (st) => ipcRenderer.send('typewriter:state', st),
+  vimState: (on) => ipcRenderer.send('vim:state', on),
+  readClipboard: () => ipcRenderer.sendSync('clipboard:read'),
+  writeClipboard: (data) => ipcRenderer.sendSync('clipboard:write', data),
   writingStyleState: (st) => ipcRenderer.send('style:state', st),
   onMenu: (cb) => ipcRenderer.on('menu', (_e, msg) => cb(msg))
 });

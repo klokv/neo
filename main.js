@@ -1010,6 +1010,31 @@ ipcMain.on('typewriter:state', (_e, on) => {
   typewriterState = on;
   try { buildMenu(); } catch (err) { logError('menu', err); }
 });
+// View → Vim Mode's tick, kept in library.json by the renderer
+let vimState = false;
+ipcMain.on('vim:state', (_e, on) => {
+  on = !!on;
+  if (on === vimState) return;
+  vimState = on;
+  try { buildMenu(); } catch (err) { logError('menu', err); }
+});
+// Vim Mode's yanks and pastes use the clipboard at once, in the order the
+// keys came, so a key typed right after never races them
+// (vimClip is vim's last write as the clipboard gives it back, so any
+// change since, even the same words formatted differently, shows)
+let vimClip = null;
+ipcMain.on('clipboard:read', (e) => {
+  const { clipboard } = require('electron');
+  const text = clipboard.readText();
+  const html = clipboard.readHTML();
+  e.returnValue = { text, html, vims: !!vimClip && text === vimClip.text && html === vimClip.html };
+});
+ipcMain.on('clipboard:write', (e, data) => {
+  const { clipboard } = require('electron');
+  clipboard.write({ text: String(data.text), html: String(data.html) });
+  vimClip = { text: clipboard.readText(), html: clipboard.readHTML() };
+  e.returnValue = true;
+});
 // File → New Books Open To: the pantser/plotter choice, kept in library.json
 let writingStyle = 'pantser';
 ipcMain.on('style:state', (_e, style) => {
@@ -1185,6 +1210,12 @@ function buildMenu() {
             { label: 'Paragraph', click: () => sendToWindow({ type: 'focus', value: 'paragraph' }) },
             { label: 'Off', click: () => sendToWindow({ type: 'focus', value: 'off' }) }
           ]
+        },
+        {
+          label: 'Vim Mode',
+          type: 'checkbox',
+          checked: vimState,
+          click: () => sendToWindow({ type: 'vim' })
         },
         { type: 'separator' },
         {

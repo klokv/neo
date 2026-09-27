@@ -1209,6 +1209,7 @@ function wireChapterBody(body, chId) {
   body.addEventListener('compositionend', () => { composing = false; });
   body.addEventListener('keydown', (e) => {
     if (composing || e.isComposing || e.keyCode === 229) return;
+    if (window.neoVim && neoVim.key(e)) return; // View → Vim Mode (vim.js)
     // count consecutive Enters — the double/triple rhythm works mid-sentence
     if (e.key === 'Enter' && !e.shiftKey) enterRun++;
     else enterRun = 0;
@@ -5408,6 +5409,7 @@ window.neo.onMenu(async (msg) => {
   if (msg.type === 'typewriter') toggleTypewriter();
   if (msg.type === 'focus') setFocus(msg.value);
   if (msg.type === 'focusCycle') cycleFocus();
+  if (msg.type === 'vim' && window.neoVim) neoVim.toggle();
   if (msg.type === 'import') importBooks();
   if (msg.type === 'stats') openStats();
   if (msg.type === 'writingStyle') {
@@ -5528,4 +5530,5 @@ loadLibrary().then(() => {
   applyTypewriter();
   focusLevel = FOCUS_LEVELS.includes(library.focus) ? library.focus : 'off';
   applyFocus();
+  if (window.neoVim) neoVim.apply();
 });
