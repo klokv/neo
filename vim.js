@@ -181,7 +181,7 @@
     while (i > 0 && kind(t[i - 1]) === k) i--;
     return { p, off: charStart(t, i) };
   }
-  // the run under the caret (word, punctuation or spaces), for iw
+  // the run under the caret (word, punctuation or spaces), for iw and cw
   function innerWord({ p, off }) {
     const t = p.textContent;
     if (!t.length) return null;
@@ -191,6 +191,85 @@
     while (a > 0 && kind(t[a - 1]) === k) a--;
     while (b < t.length && kind(t[b]) === k) b++;
     return [charStart(t, a), whole(t, b)];
+  }
+
+  // Each gives [start, end) within the caret's paragraph; ip and ap are
+  // dd's paragraph and are handled there.
+
+  let segmenter = null;
+  function sentenceAt(t, off, around) {
+    if (!window.Intl || !Intl.Segmenter) return null;
+    if (!segmenter) segmenter = new Intl.Segmenter((library.spellLanguage || 'en').split('-')[0], { granularity: 'sentence' });
+    for (const seg of segmenter.segment(t)) {
+      const end = seg.index + seg.segment.length;
+      if (off < end || end === t.length) {
+        return [seg.index, around ? end : seg.index + seg.segment.replace(/\s+$/, '').length];
+      }
+    }
+    return null;
+  }
+  // straight quotes pair up in order: 1st with 2nd, 3rd with 4th…
+  function straightQuoted(t, off, q) {
+    const at = [];
+    for (let i = 0; i < t.length; i++) if (t[i] === q) at.push(i);
+    for (let k = 0; k + 1 < at.length; k += 2) if (off <= at[k + 1]) return [at[k], at[k + 1]];
+    return null;
+  }
+  // “…” and (…) nest; outside any pair, the next pair on the paragraph
+  function enclosed(t, off, o, c) {
+    let depth = 0, a = -1;
+    for (let i = Math.min(off, t.length - 1); i >= 0; i--) {
+      if (t[i] === c && i !== off) depth++;
+      else if (t[i] === o) { if (!depth) { a = i; break; } depth--; }
+    }
+    if (a < 0) { a = t.indexOf(o, off); if (a < 0) return null; }
+    depth = 0;
+    for (let i = a + 1; i < t.length; i++) {
+      if (t[i] === o) depth++;
+      else if (t[i] === c) { if (!depth) return [a, i]; depth--; }
+    }
+    return null;
+  }
+  function textObject(obj, h) {
+    const r = objectRange(obj, h);
+    const t = h.p.textContent;
+    return r && [charStart(t, r[0]), whole(t, r[1])];
+  }
+  function objectRange(obj, h) {
+    const t = h.p.textContent;
+    const around = obj[0] === 'a';
+    const what = obj[1];
+    if (what === 'w') {
+      const w = innerWord(h);
+      if (!w || !around) return w;
+      let [a, b] = w;
+      if (kind(t[a]) === 0) { // on spaces: the spaces and the word after them
+        const k = kind(t[b]);
+        while (b < t.length && k && kind(t[b]) === k) b++;
+        return [a, b];
+      }
+      if (kind(t[b]) === 0 && b < t.length) while (b < t.length && kind(t[b]) === 0) b++;
+      else while (a > 0 && kind(t[a - 1]) === 0) a--; // no space after: take the one before
+      return [a, b];
+    }
+    if (what === 's') return sentenceAt(t, h.off, around);
+    let pair = null;
+    if (what === '"') {
+      const curly = enclosed(t, h.off, '“', '”');
+      const straight = straightQuoted(t, h.off, '"');
+      const holds = (r) => r && r[0] <= h.off && h.off <= r[1];
+      pair = holds(curly) ? curly : holds(straight) ? straight : curly || straight;
+    } else if ('()b'.includes(what)) pair = enclosed(t, h.off, '(', ')');
+    if (!pair) return null;
+    let [a, b] = pair;
+    if (!around) return [a + 1, b];
+    b++;
+    // a" takes the space after the quote too (or before, at a paragraph's end)
+    if (what === '"') {
+      if (b < t.length && /\s/.test(t[b])) while (b < t.length && /\s/.test(t[b])) b++;
+      else while (a > 0 && /\s/.test(t[a - 1])) a--;
+    }
+    return [a, b];
   }
 
   function caretTop() {
@@ -333,13 +412,14 @@
     const ps = [...h.p.parentElement.children];
     const i = ps.indexOf(h.p);
     const lines = (a, b) => ({ lines: [ps[Math.max(0, a)], ps[Math.min(ps.length - 1, b)]] });
-    if (rest === op) return lines(i, i + count - 1); // dd cc yy
+    // a paragraph is a line here, so ip and ap act like dd cc yy
+    if (rest === op || rest === 'ip' || rest === 'ap') return lines(i, i + count - 1);
     if (rest === 'j') return i < ps.length - 1 ? lines(i, i + count) : null; // like vim, fails on the last
     if (rest === 'k') return i > 0 ? lines(i - count, i) : null;
     if (rest === 'G') return lines(i, ps.length - 1);
     if (rest === 'gg') return lines(0, i);
-    if (rest === 'iw') {
-      const r = innerWord(h);
+    if (/^[ia].$/.test(rest)) {
+      const r = textObject(rest, h);
       return r && { from: { p: h.p, off: r[0] }, to: { p: h.p, off: r[1] } };
     }
     if (op === 'c' && rest === 'w' && kind(h.p.textContent[h.off])) {
@@ -537,14 +617,14 @@
 
   // what the motions and text objects are, so the rest can say they aren't
   const MOTION = /^(?:[hlwbe0$jkG]|gg|[fFtT].)$/;
-  const OBJECT = /^iw$/;
+  const OBJECT = /^[ia][wsp"()b]$/;
   const unknown = (keys) => toast(`${keys} isn’t in NEO’s Vim Mode`, 2500);
 
   // runs pending as a command; returns false while it still needs keys
   function exec(count, op, rest) {
     const h = here();
     if (!h) return true;
-    const needsMore = /^[gZfFtT]$/.test(rest) || (op && rest === 'i');
+    const needsMore = /^[gZfFtT]$/.test(rest) || (op && (rest === 'i' || rest === 'a'));
     if (needsMore) return false;
 
     if (op) {
