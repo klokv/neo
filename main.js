@@ -1012,10 +1012,10 @@ ipcMain.on('typewriter:state', (_e, on) => {
 });
 // View → Vim Mode's tick, kept in library.json by the renderer
 let vimState = false;
+// (rebuilt even when unchanged: a click ticks the box before the renderer
+// has asked how to quit vim, and a wrong answer has to untick it)
 ipcMain.on('vim:state', (_e, on) => {
-  on = !!on;
-  if (on === vimState) return;
-  vimState = on;
+  vimState = !!on;
   try { buildMenu(); } catch (err) { logError('menu', err); }
 });
 // Vim Mode's yanks and pastes use the clipboard at once, in the order the

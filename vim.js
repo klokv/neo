@@ -27,7 +27,27 @@
     if (window.neo.vimState) window.neo.vimState(on); // the View menu's tick
     paint();
   }
-  function toggle() {
+  // Like Obsidian's: before vim keys take over the page, the writer shows
+  // they know the way back out. Every answer here works in NEO too.
+  const WAYS_OUT = ['ZZ', 'ZQ', ...['q', 'q!', 'wq', 'wq!', 'x', 'x!', 'qa', 'qa!', 'wqa', 'xa'].map((c) => ':' + c)];
+  async function knowsTheWayOut() {
+    let title = 'Before Vim Mode: how do you quit Vim?';
+    for (;;) {
+      const answer = await askInput(title, 'The command, as you’d type it');
+      if (answer === null) return false;
+      if (WAYS_OUT.includes(answer)) return true;
+      if (WAYS_OUT.includes(':' + answer)) { title = 'Almost. Vim wants the colon first.'; continue; }
+      toast('That wouldn’t get you out of Vim. Vim Mode stays off.');
+      return false;
+    }
+  }
+  async function toggle() {
+    if (!library.vim) {
+      const caret = captureCaret();
+      const ok = await knowsTheWayOut();
+      restoreCaret(caret);
+      if (!ok) { apply(); return; } // stays off, and so does the menu's tick
+    }
     library.vim = !library.vim;
     window.neo.writeLibrary(library);
     apply();
@@ -729,7 +749,7 @@
       case 'k': lines(count, 'backward'); return true;
       case 'gg': { const p = allParas()[0]; if (p) place(p, 0); return true; }
       case 'G': { const a = allParas(); if (a.length) place(a[a.length - 1], 0); return true; }
-      case 'ZZ': backToShelf(); return true;
+      case 'ZZ': case 'ZQ': backToShelf(); return true; // NEO has always saved
       case 'v': startVisual(false); return true;
       case 'V': startVisual(true); return true;
     }
