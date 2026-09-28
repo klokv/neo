@@ -906,6 +906,15 @@
 
   const ALIASES = { Enter: 'j', Backspace: 'h', ' ': 'l', Delete: 'x' };
 
+  // one character for vim, from a key or from text a keyboard typed
+  function feed(k) {
+    if (mode === 'visual') runVisual(k);
+    else if (ex !== null) ex += k;
+    else if (k === ':' && !pending) ex = '';
+    else if (pending || sel().isCollapsed || !onSelection(k)) run(k);
+    paint();
+  }
+
   // called first in the chapter's keydown chain; true = the key was vim's
   function key(e) {
     if (!on) return false;
@@ -938,12 +947,10 @@
       const k = ALIASES[e.key] || e.key;
       if (k.length !== 1) return false;
       take();
-      runVisual(k);
-      paint();
+      feed(k);
       return true;
     }
     if (ex !== null) { take(); exKey(e); return true; }
-    if (e.key === ':' && !pending) { take(); ex = ''; showEx(); return true; }
     if (e.key === 'Escape') {
       pending = '';
       paint();
@@ -956,11 +963,35 @@
     const k = ALIASES[e.key] || e.key;
     if (k.length !== 1) return false;
     take();
-    if (!pending && !sel().isCollapsed && onSelection(k)) return true;
-    run(k);
-    paint();
+    feed(k);
     return true;
   }
+
+  // Some keys type without reaching key() as plain keys: ⌥ letters on a Mac,
+  // AltGr on Windows, dead keys and input methods (as composition, which
+  // the keydown chain leaves alone). Outside insert mode their text goes to
+  // vim as keys, never into the manuscript, so a dead-key " still does ci".
+  const outsideInsert = (e) => on && mode !== 'insert' && e.target.closest && e.target.closest('.chapter-body');
+  document.addEventListener('beforeinput', (e) => {
+    if (!outsideInsert(e) || e.inputType !== 'insertText' || !e.data) return;
+    e.preventDefault();
+    e.stopPropagation();
+    for (const k of e.data) feed(k);
+  }, true);
+  document.addEventListener('compositionstart', (e) => {
+    if (!outsideInsert(e) || !sel().rangeCount) return;
+    // setting the selection ends the engine's typing run, so the composed
+    // text is an undo step of its own and not part of the last x or dw
+    const r = sel().getRangeAt(0);
+    sel().removeAllRanges();
+    sel().addRange(r);
+  }, true);
+  document.addEventListener('compositionend', (e) => {
+    if (!outsideInsert(e) || !e.data) return;
+    document.execCommand('undo'); // the composed text comes back out, off the undo history
+    afterHistory();
+    for (const k of e.data) feed(k);
+  }, true);
 
   window.NeoVim = { key, apply, toggle };
 })();
