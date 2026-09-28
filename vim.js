@@ -10,6 +10,7 @@
   let mode = 'normal';     // 'normal' | 'insert' | 'visual'
   let pending = '';        // keys of an unfinished command: 3dw, gg, fa, ciw…
   let xChar = '';          // x keeps its character here, off the clipboard
+  let lastFind = null;     // the last f, t, F or T, for ; and ,
   let lastWasX = false;    // p right after x pastes xChar, so xp swaps letters
   let xTook = false;       // x removed something (a flag or *** leaves xChar empty)
   let reg = null;          // what d, c and y last took, whole: { html, text, lines }
@@ -227,10 +228,12 @@
   // dd's paragraph and are handled there.
 
   let segmenter = null;
-  function sentenceAt(t, off, around) {
-    if (!window.Intl || !Intl.Segmenter) return null;
+  function sentences(t) {
     if (!segmenter) segmenter = new Intl.Segmenter((library.spellLanguage || 'en').split('-')[0], { granularity: 'sentence' });
-    for (const seg of segmenter.segment(t)) {
+    return segmenter.segment(t);
+  }
+  function sentenceAt(t, off, around) {
+    for (const seg of sentences(t)) {
       const end = seg.index + seg.segment.length;
       if (off < end || end === t.length) {
         return [seg.index, around ? end : seg.index + seg.segment.replace(/\s+$/, '').length];
@@ -332,6 +335,34 @@
       place(next, next.textContent.length);
       sel().modify('move', 'backward', 'lineboundary');
     }
+  }
+  // } and {: to the last letter of the paragraph (or of the next one, when
+  // already there) and to the first (or the previous one's first)
+  function paraEnd({ p, off }) {
+    const last = stepBack(p.textContent, len(p));
+    if (off < last) return { p, off: last };
+    const n = nextPara(p);
+    return n ? { p: n, off: stepBack(n.textContent, len(n)) } : { p, off };
+  }
+  function paraStart({ p, off }) {
+    if (off > 0) return { p, off: 0 };
+    const q = prevPara(p);
+    return q ? { p: q, off: 0 } : { p, off };
+  }
+  // ) and (: to the start of the next sentence, and of this one (or the
+  // previous one, when already there), on across paragraphs
+  function sentenceFwd({ p, off }) {
+    const s = [...sentences(p.textContent)].find((g) => g.index > off);
+    if (s) return { p, off: s.index };
+    const n = nextPara(p);
+    return n ? { p: n, off: 0 } : { p, off: len(p) };
+  }
+  function sentenceBack({ p, off }) {
+    const s = [...sentences(p.textContent)].filter((g) => g.index < off).pop();
+    if (s) return { p, off: s.index };
+    const q = prevPara(p);
+    const last = q && [...sentences(q.textContent)].pop();
+    return q ? { p: q, off: last ? last.index : 0 } : { p, off: 0 };
   }
   // count lines down or up, stopping at the book's edge
   function lines(count, dir) {
@@ -436,6 +467,54 @@
     replaceParas(first, last, blank.outerHTML);
     caretIntoStart(body.children[i]);
     setMode('insert');
+  }
+
+  // r: the letters under the caret become ch and keep their italics; a ***
+  // or a flag takes no letters
+  function replaceChars(h, ch, count) {
+    const t = h.p.textContent;
+    let b = h.off;
+    for (let n = 0; n < count; n++) {
+      if (b >= t.length) return; // like vim, not enough letters is no change
+      b = charEnd(t, b);
+    }
+    const r = rangeOf(h, { p: h.p, off: b });
+    if (isBreak(h.p) || [...h.p.querySelectorAll('.ph-mark, .darling-anchor')].some((m) => r.intersectsNode(m))) return;
+    const s = sel();
+    s.removeAllRanges();
+    s.addRange(r);
+    healSelectionSeams(h.p.parentElement);
+    document.execCommand('insertText', false, ch.repeat(count));
+    place(h.p, stepBack(h.p.textContent, h.off + ch.length * count));
+  }
+  // J, 3J, VJ: the paragraphs from p join into one, a space at each seam,
+  // in one undo step. Like vim, a chapter's last paragraph joins nothing,
+  // and neither does a *** or the outline (see isUnit).
+  function joinParas(p, count) {
+    let last = p;
+    for (let n = 0; n < Math.max(1, count - 1); n++) {
+      const next = last.nextElementSibling;
+      if (!next || isUnit(next) || startsSection(next)) break;
+      last = next;
+    }
+    if (last === p || isUnit(p)) return;
+    const out = p.cloneNode(false);
+    let seam = 0;
+    for (let q = p; ; q = q.nextElementSibling) {
+      const t = q.textContent;
+      const from = q === p ? 0 : t.length - t.trimStart().length;
+      if (q !== p) {
+        seam = out.textContent.length;
+        if (hasText(out) && t.trim() && !/\s$/.test(out.textContent)) out.append(' ');
+      }
+      out.append(rangeOf({ p: q, off: from }, { p: q, off: len(q) }).cloneContents());
+      if (q === last) break;
+    }
+    if (!hasText(out)) out.innerHTML = '<br>';
+    const body = p.parentElement;
+    const i = indexIn(p);
+    replaceParas(p, last, out.outerHTML);
+    place(body.children[i], seam);
   }
 
   // what an operator covers: { lines: [first, last] }, or { from, to } as
@@ -664,6 +743,7 @@
       }
       return { p: h.p, off: till ? (fwd ? stepBack(text, o) : charEnd(text, o)) : o, incl: fwd };
     };
+    const find = (cmd, ch) => findChar(ch, 'ft'.includes(cmd), 'tT'.includes(cmd));
     // a count runs until the motion stops moving: 999999999w ends at the end
     const repeat = (step) => {
       for (let n = 0; n < count; n++) {
@@ -679,10 +759,15 @@
       case 'w': return repeat(wordFwd);
       case 'b': return repeat(wordBack);
       case 'e': return { ...repeat(wordEnd), incl: true };
-      case 'f': return findChar(m[1], true, false);
-      case 't': return findChar(m[1], true, true);
-      case 'F': return findChar(m[1], false, false);
-      case 'T': return findChar(m[1], false, true);
+      case 'f': case 't': case 'F': case 'T':
+        lastFind = { cmd: m[0], ch: m[1] };
+        return find(m[0], m[1]);
+      case ';': return lastFind && find(lastFind.cmd, lastFind.ch);
+      case ',': return lastFind && find({ f: 'F', F: 'f', t: 'T', T: 't' }[lastFind.cmd], lastFind.ch);
+      case '}': return { ...repeat(paraEnd), incl: true };
+      case '{': return repeat(paraStart);
+      case ')': return repeat(sentenceFwd);
+      case '(': return repeat(sentenceBack);
       case '0': lineEdge('backward'); return { ...here(), moved: true };
       case '$': lineEdge('forward'); return { ...here(), incl: true, moved: true };
       default: return null;
@@ -690,7 +775,7 @@
   }
 
   // what the motions and text objects are, so the rest can say they aren't
-  const MOTION = /^(?:[hlwbe0$jkG]|gg|[fFtT].)$/;
+  const MOTION = /^(?:[hlwbe0$jkG;,{}()]|gg|[fFtT].)$/;
   const OBJECT = /^[ia][wsp"()b]$/;
   const unknown = (keys) => toast(`${keys} isn’t in NEO’s Vim Mode`, 2500);
 
@@ -698,7 +783,7 @@
   function exec(count, op, rest) {
     const h = here();
     if (!h) return true;
-    const needsMore = /^[gZfFtT]$/.test(rest) || (op && (rest === 'i' || rest === 'a'));
+    const needsMore = /^[gZfFtTr]$/.test(rest) || (op && (rest === 'i' || rest === 'a'));
     if (needsMore) return false;
 
     if (op) {
@@ -709,6 +794,7 @@
     }
 
     const end = len(h.p);
+    if (/^r.$/.test(rest)) { replaceChars(h, rest[1], count); return true; }
     // a *** takes no words: writing starts on a new line beside it
     if (isBreak(h.p) && 'iIaA'.includes(rest)) { openLine('aA'.includes(rest)); return true; }
     switch (rest) {
@@ -716,6 +802,7 @@
       case 'a': place(h.p, charEnd(h.p.textContent, h.off)); setMode('insert'); return true;
       case 'I': place(h.p, 0); setMode('insert'); return true;
       case 'A': place(h.p, end); setMode('insert'); return true;
+      case 'J': joinParas(h.p, count); return true;
       case 'o': openLine(true); return true;
       case 'O': openLine(false); return true;
       case 'x': {
@@ -827,6 +914,16 @@
     }
     if (rest === 'o') { vis = { ...vis, a: vis.h, h: vis.a }; drawVisual(); return; }
     if ('dxcsy'.includes(rest)) { visualOperator(rest); return; }
+    if (rest === 'J') {
+      const [s0, e0] = ordered();
+      const ps = [...s0.p.parentElement.children];
+      vis = null;
+      setMode('normal');
+      joinParas(s0.p, Math.max(2, ps.indexOf(e0.p) - ps.indexOf(s0.p) + 1));
+      clamp();
+      paint();
+      return;
+    }
     if (!MOTION.test(rest) && !OBJECT.test(rest)) { unknown(keys); return; }
     if (OBJECT.test(rest)) {
       const r = textObject(rest, h);
@@ -905,6 +1002,9 @@
   }
 
   const ALIASES = { Enter: 'j', Backspace: 'h', ' ': 'l', Delete: 'x' };
+  // after f, t or r the next key is the letter itself (f then Space finds a
+  // space), and a key with no letter just drops the command
+  const literal = () => /[fFtTr]$/.test(pending);
 
   // one character for vim, from a key or from text a keyboard typed
   function feed(k) {
@@ -944,8 +1044,8 @@
     if (mode === 'visual') {
       if (e.key === 'Escape') { take(); endVisual(); return true; }
       if (e.key === 'Tab') { take(); return true; }
-      const k = ALIASES[e.key] || e.key;
-      if (k.length !== 1) return false;
+      const k = literal() ? e.key : ALIASES[e.key] || e.key;
+      if (k.length !== 1) { if (!literal()) return false; take(); pending = ''; paint(); return true; }
       take();
       feed(k);
       return true;
@@ -960,8 +1060,8 @@
       return true;
     }
     if (e.key === 'Tab') { take(); return true; }
-    const k = ALIASES[e.key] || e.key;
-    if (k.length !== 1) return false;
+    const k = literal() ? e.key : ALIASES[e.key] || e.key;
+    if (k.length !== 1) { if (!literal()) return false; take(); pending = ''; paint(); return true; }
     take();
     feed(k);
     return true;
