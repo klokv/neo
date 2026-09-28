@@ -1,0 +1,32 @@
+# Runs the Vim Mode end-to-end tests (npm test) on Windows, Linux and macOS,
+# where keyboards differ: ⌥ types letters on a Mac, AltGr is Ctrl+Alt on
+# Windows, and ⌘ or Ctrl drive the shortcuts.
+
+name: Test
+
+on:
+  push:
+    paths: ['vim.js', 'app.js', 'main.js', 'preload.js', 'index.html', 'test/**', 'package.json']
+  pull_request:
+    paths: ['vim.js', 'app.js', 'main.js', 'preload.js', 'index.html', 'test/**', 'package.json']
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - run: npm install
+      # allowScripts pins an older Electron, so its binary may be skipped
+      - run: node node_modules/electron/install.js
+      - if: runner.os == 'Linux'
+        run: xvfb-run -a npm test -- --no-sandbox
+      - if: runner.os != 'Linux'
+        run: npm test
